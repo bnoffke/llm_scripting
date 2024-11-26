@@ -1,0 +1,34 @@
+# Exclude environment files
+.env
+
+# Exclude Python scratchpad
+scratchpad.py
+
+# Standard Python stuff
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.env
+*.venv
+*.virtualenv
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# Dependency directories
+node_modules/
