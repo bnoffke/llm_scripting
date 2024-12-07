@@ -1,0 +1,5 @@
+openai
+dbt
+dbt-core
+dbt-postgres
+python-dotenv
