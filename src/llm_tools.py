@@ -10,6 +10,8 @@ from contextlib import redirect_stdout
 import io
 import glob
 
+
+#Since this is for personal use, the dbt project directory is hardcoded for now
 DBT_PROJECT_DIR = '/home/bnoffke/repos/stmad_dbt'
 # Get the path of the current script
 script_dir = Path(__file__).resolve().parent
@@ -21,6 +23,7 @@ env_path = script_dir / '../config/.env'  # Adjust relative path as needed
 load_dotenv(dotenv_path=env_path)
 
 class llm:
+    #This class defines the basics for calling an LLM API (OpenAI only for now)
     def __init__(self):
         self.MODEL = os.getenv('MODEL')
         self.client = OpenAI(
@@ -30,6 +33,10 @@ class llm:
             )
 
     def complete(self,instructions,request):
+        """
+        Assembles, sends, and receives the completion for a given set of system instructions and request contents.
+        """
+
         completion = self.client.chat.completions.create(
             model=self.MODEL,
             messages=[
@@ -38,8 +45,9 @@ class llm:
             ]
             )
         return(completion)
-    
+
 class dbt_auto_doc:
+    #This class defines methods to process the documentation for a given dbt model    
     def __init__(self,dbt_model_dir,dbt_model_name,clean_md = False):
         self.llm = llm()
         self.dbt_project_dir = DBT_PROJECT_DIR
@@ -47,10 +55,14 @@ class dbt_auto_doc:
         self.dbt_model_name = dbt_model_name
         self.dbt_yml_file = f'{dbt_model_name}.yml'
         self.dbt_yml_filepath = f'{self.dbt_model_dir}/{self.dbt_yml_file}'
+
+        #The universal .md file is expected to contain the AI generated descriptions for the dbt project
         self.universal_md_file = f'{self.dbt_project_dir}/models/docs/_docs.md'
+
         self.dbt_venv_path = f'{self.dbt_project_dir}/.venv'
         self.dbt_model_sql_filepath = f'{self.dbt_model_dir}/{self.dbt_model_name}.sql'
 
+        #Check if universal md file exists, if so grab the contents and the currently documented columns
         if os.path.exists(self.universal_md_file):
             with open(self.universal_md_file, 'r') as file:
                 self.universal_md_text = file.read()
@@ -60,30 +72,34 @@ class dbt_auto_doc:
             self.universal_md_text = ''
             self.initial_md_col_names = []
 
+        #Grab contents of the dbt model sql (raw file, not compiled)
         try:
             with open(self.dbt_model_sql_filepath, 'r') as file:
                 self.dbt_model_sql = file.read()
         except:
             raise Exception('SQL file not found')
 
+        #Previous iterations resulted in a messy md file (duplicate column names, unterminated docs macros)
+        #Not as necessary with recent changes, but there's an option to attempt clean-up
         if clean_md:
             self.clean_md_docs()
 
-        if not os.path.exists(self.dbt_yml_filepath):
-            self.dbt_yml_text = self.generate_model_yaml()
-        else:
+        #Use dbt codegen to create the contents of the yml file, regardless if it already exists
+        #This helps handle new columns when an existing model is updated
+        self.dbt_yml_text = self.generate_model_yaml()
+        if os.path.exists(self.dbt_yml_filepath):
             with open(self.dbt_yml_filepath, 'r') as file:
-                self.dbt_yml_text = file.read()
+                self.existing_dbt_yml_text = file.read()
+        else:
+            self.existing_dbt_yml_text = ''
 
 
     def generate_model_yaml(self):
         """
         Generate YAML for a model using dbt's CLI
-        
-        Args:
-            dbt_project_path: Full path to the dbt project directory
-            model_name: Name of the model to generate YAML for
+        Current approach captures stdout when dbt command is invoked
         """
+
         # Change to the dbt project directory
         original_dir = os.getcwd()
         os.chdir(self.dbt_project_dir)
@@ -117,6 +133,10 @@ class dbt_auto_doc:
             stdout_capture.close()
 
     def extract_md_col_names(self):
+        """
+        Given a dbt md file with docs blocks macros, extract the column names with OpenAI API
+        """
+
         agent_instruction = """
         You are very familiar with how md files are created to support dbt docs blocks macros. 
         You will receive the contents of an md file. You need to extract a list of the column names, returning a comma delimited list.
@@ -138,9 +158,14 @@ class dbt_auto_doc:
 
         completion = self.llm.complete(agent_instruction,self.universal_md_text)
         self.initial_md_col_names = completion.choices[0].message.content.split(',')
-        print(self.initial_md_col_names)
+        #print(self.initial_md_col_names)
     
     def extract_yml_new_col_names(self):
+        """
+        Returns the new columns found in a yml file and returns them if they are not found in the universal md file.
+        """
+
+
         agent_instruction = """
         You are very familiar with how dbt yml files are structured for models. Your job is to retrieve the column names specified in a dbt yml file, returning a comma delimited list.
 
@@ -161,6 +186,12 @@ class dbt_auto_doc:
         print(self.new_yml_columns)
 
     def clean_md_docs(self):
+        """
+        This attempts to clean up the universal md file by removing duplicate entries and fixing unterminated docs blocks macros.
+        Not as useful with recent improvements on updating the universal md file.
+        """
+
+
         agent_instruction = """
         You are an expert in dbt configuration. Your job is to ensure that the _docs.md file compiles successfully for dbt. The main issues you will find are:
         1. Duplicate named docs blocks.
@@ -188,6 +219,10 @@ class dbt_auto_doc:
         return(md_output)
 
     def generate_column_descriptions_md(self):
+        """
+        Given a list of column names, this generates descriptions contained within docs blocks macro, to be used in the universal markdown file.
+        """
+
         agent_instruction = """
         You are an expert in munincipal finance, infrastructure, and terminology. You frequently interpret technical column names and provide plain, informative descriptions.
 
@@ -219,6 +254,7 @@ class dbt_auto_doc:
         
         return(md_output)
     
+    #Deprecated
     def _merge_md_file(self,new_md_contents): #Deprecated
         agent_instruction = """
         You are responsible for reading and merging .md files for dbt docs blocks. You are an expert in municipal terminology.
@@ -245,7 +281,12 @@ class dbt_auto_doc:
         print('Merged new descriptions into universal md file.')
         return(md_output)
     
+
     def merge_md_file(self,new_md_contents):
+        """
+        Docs blocks descriptions have been generated for new columns, this will append those new columns to the end of the universal md file.
+        """
+
         if len(new_md_contents) > 0:
             md_output = f'{self.universal_md_text}\n\n{new_md_contents}'
             with open(self.universal_md_file, 'w+') as file:
@@ -256,7 +297,22 @@ class dbt_auto_doc:
             md_output = ''
         return(md_output)
     
+    def extract_model_description(self):
+        agent_instruction = """
+        You are an expert in dbt model yaml files. Your task is to extract the model description from the provided yaml text.
+        Only return the model description.
+        """
+       
+        completion = self.llm.complete(agent_instruction,self.existing_dbt_yml_text)
+        self.dbt_model_description = completion.choices[0].message.content.replace('```','').replace('markdown','')
+        print(f'Generated description for {self.dbt_model_name}:\n{self.dbt_model_description}')
+        return(self.dbt_model_description)
+
     def generate_model_description(self):
+        """
+        Given the SQL of a dbt model, this generates a description for the model.
+        """
+
         agent_instruction = """
         You are an expert  in SQL. You frequently translate SQL syntax into human readable text for documentation purposes. You're familiar with municipal finance, enough to understand why some SQL transformations are needed.
 
@@ -268,12 +324,16 @@ class dbt_auto_doc:
         Only return the description that you write.
         """
        
-        completion = self.llm.complete(agent_instruction,self.dbt_yml_text)
+        completion = self.llm.complete(agent_instruction,self.dbt_model_sql)
         self.dbt_model_description = completion.choices[0].message.content.replace('```','').replace('markdown','')
         print(f'Generated description for {self.dbt_model_name}:\n{self.dbt_model_description}')
         return(self.dbt_model_description)
 
     def update_dbt_yml_col_descriptions(self):
+        """
+        Given the universal md file and the dbt model yml, this matches up columns between the two and inserts the docs macro into the yml file.
+        """
+
         agent_instruction = """
         Your colleague has just documented column descriptions in a .md file for municipal fiance, infrastructure, and terminology. Your job is to apply the dbt docs blocks macros into the provided yml.
 
@@ -301,6 +361,10 @@ class dbt_auto_doc:
         return(yml_output)
     
     def update_dbt_yml_model_description(self):
+        """
+        This updates the dbt model yml description property with the generated description, preserving existing descriptions if they exist.
+        """
+
         agent_instruction = """
         Your colleague has just documented a description for a dbt SQL model. Your job is to insert the model description into the provided yml.
 
@@ -327,7 +391,15 @@ class dbt_auto_doc:
         return(self.dbt_yml_text)
 
     def execute_auto_doc(self):
-        self.generate_model_description()
+        """
+        This executes the most common sequence of auto-doc commands.
+        """
+
+        if self.existing_dbt_yml_text == '':
+            self.generate_model_description()
+        else:
+            self.extract_model_description()
+            #self.generate_model_description()
         self.extract_yml_new_col_names()
         md_from_yml = self.generate_column_descriptions_md()
         self.merge_md_file(md_from_yml)
@@ -335,9 +407,22 @@ class dbt_auto_doc:
         self.update_dbt_yml_model_description()
 
 def __main__():
+    """
+    Executes the common sequence for dbt documentation generation:
+        Column descriptions, managed via .md file
+        Model descriptions
+        Writes columns descriptions to the universal .md file and writes/creates the .yml file for each dbt model
+
+    Command line arguments:
+        1: Model directory (required)
+        2: Model name (optional)
+
+    If only the directory is supplied, this will loop over all models in the directory
+    """
+
     dbt_model_dir = sys.argv[1]
     if len(sys.argv) == 2:
-        #Only directory specified
+        #Only directory specified, document all models in the directory
         print(f'Generating documentation for all models in {DBT_PROJECT_DIR}/{dbt_model_dir}')
         for filepath in glob.glob(f'{DBT_PROJECT_DIR}/{dbt_model_dir}/*.sql'):
             dbt_model_name=filepath.split('/')[-1].split('.')[0]
@@ -345,12 +430,11 @@ def __main__():
             dbt_auto_doccer =  dbt_auto_doc(dbt_model_dir,dbt_model_name)
             dbt_auto_doccer.execute_auto_doc()
     else:
+        #Model name is specified, only document this model
         dbt_model_name = sys.argv[2]
         dbt_auto_doccer =  dbt_auto_doc(dbt_model_dir,dbt_model_name)
         
         dbt_auto_doccer.execute_auto_doc()
-    #dbt_auto_doccer.generate_model_description()
+    
 if __name__ == '__main__':
     __main__()
-    #myLLM = llm()
-    #print(myLLM.complete('You are a cool guy','Why was I born?'))
